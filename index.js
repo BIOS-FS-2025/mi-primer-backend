@@ -1,7 +1,9 @@
+const { PrismaClient } = require("./generated/prisma");
 const express = require("express");
-const dotenv = require('dotenv')
-const { v4: uuidv4 } = require('uuid');
-const crypto = require('crypto');
+const dotenv = require("dotenv");
+const crypto = require("crypto");
+
+const prisma = new PrismaClient();
 
 dotenv.config();
 
@@ -13,121 +15,153 @@ const PORT = process.env.PORT || 3000;
 const SECRET_KEY = process.env.SECRET_KEY;
 
 const encryptPassword = (password) => {
-  const hmac = crypto.createHmac('sha256', SECRET_KEY)
+  const hmac = crypto.createHmac("sha256", SECRET_KEY);
   hmac.update(password);
-  return hmac.digest('hex');
-}
+  return hmac.digest("hex");
+};
 
-let users = [
-  { id: uuidv4(), name: 'Juan Perez', email: 'juan.perez@example.com', password: encryptPassword('claveJuan') },
-  { id: uuidv4(), name: 'Ana Garcia', email: 'ana.garcia@example.com', password: encryptPassword('claveAna') },
-  { id: uuidv4(), name: 'Luis Martinez', email: 'luis.martinez@example.com', password: encryptPassword('claveLuis') },
-]
+app.get("/users", async (req, res) => {
+  try {
+    const users = await prisma.user.findMany({
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+    res.json({
+      data: users,
+      message: "Usuarios obtenidos correctamente",
+    });
+  } catch (error) {
+    console.error("Error al obtener los usuarios:", error); //CloudWatch AWS
+    res.status(500).json({
+      message: "Error al obtener los usuarios",
+    });
+  }
+});
 
-app.get('/users', (req, res) => {
-  res.json(users);
+app.get("/users/:id", async (req, res) => {
+  try {
+    const userId = req.params.id;
+
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+
+    if (!user) {
+      return res.status(404).json({
+        message: "Usuario no encontrado",
+      });
+    }
+
+    res.status(200).json({
+      data: user,
+      message: "Usuario encontrado correctamente",
+    });
+  } catch (error) {
+    console.error("Error al obtener el usuario:", error);
+    res.status(500).json({
+      message: "Error al obtener el usuario",
+    });
+  }
+});
+
+app.post("/users", async (req, res) => {
+  try {
+    const { name, email, password } = req.body;
+
+    const existingUser = await prisma.user.findUnique({
+      where: { email },
+    });
+
+    if (existingUser) {
+      return res
+        .status(400)
+        .json({ message: "Ese usuario con ese correo ya existe" });
+    }
+
+    const newUser = await prisma.user.create({
+      data: {
+        name,
+        email,
+        password: encryptPassword(password),
+      },
+    });
+
+    const { password: _, ...userResponse } = newUser;
+    res.status(201).json({
+      data: userResponse,
+      message: "Usuario creado correctamente",
+    });
+  } catch (error) {
+    console.error("Error al crear el usuario:", error);
+    res.status(500).json({
+      message: "Error al crear el usuario",
+    });
+  }
+});
+
+app.put('/users/:id', async (req, res) => {
+  try {
+    const userId = req.params.id;
+    const { name, email, password } = req.body;
+
+    const dataToUpdate = {};
+
+    if (name) dataToUpdate.name = name;
+    if (email) dataToUpdate.email = email;
+    if (password) dataToUpdate.password = encryptPassword(password);
+
+    const updatedUser = await prisma.user.update({
+      where: { id: userId },
+      data: dataToUpdate,
+    });
+
+    const { password: _, ...userResponse } = updatedUser;
+
+    res.status(200).json({
+      data: userResponse,
+      message: 'Usuario actualizado correctamente'
+    })
+  } catch (error) {
+    res.status(500).json({
+      message: 'Error al actualizar el usuario'
+    })
+  }
 })
 
-app.get('/users/:id', (req, res) => {
-  const userId = req.params.id;
-
-  const userIndex = users.findIndex(user => user.id === userId);
-  console.log('Est es el index del usuario solicitado por params', userIndex);
-
-  if (userIndex === -1) {
-    return res.status(404).json({
-      message: 'Usuario no encontrado'
+app.delete('/users/:id', async (req, res) => {
+  try {
+    const userId = req.params.id;
+    await prisma.user.delete({
+      where: { id: userId }
     })
-  }
 
-  const user = users[userIndex]
-
-  res.status(200).json({
-    data: user,
-    message: 'Usuario encontrado correctamente'
-  });
-})
-
-app.post('/users', (req, res) => {
-
-  const existingUser = users.find(user => user.email === req.body.email);
-
-  if (existingUser) {
-    return res.status(400).json({
-      message: 'Ese usuarios con ese correo ya existe'
-    })
-  }
-
-  const newUser = {
-    id: uuidv4(),
-    name: req.body.name,
-    email: req.body.email,
-    password: encryptPassword(req.body.password)
-  }
-
-  if (!newUser.name || !newUser.email) {
-    return res.status(400).json({
-      message: 'El nombre y el email son requeridos'
-    })
-  }
-
-  users.push(newUser);
-
-  res.status(201).json({
-    data: newUser,
-    message: 'Usuario creado correctamente'
-  })
-})
-
-app.put('/users/:id', (req, res) => {
-  const user = users.find(user => user.id === req.params.id); 
-
-  if (!user) {
-    return res.status(404).json({
-      message: 'Usuario no encontrado'
-    })
-  }
-
-  const { name, email } = req.body;
-
-  if (email && email !== user.email) {
-    const emailExists = users.some(user => user.email === email);
-    if (emailExists) {
-      return res.status(400).json({
-        message: 'El correo ya está en uso'
+    res.status(204).send();
+  } catch (error) {
+    console.error('Error al eliminar el usuario:', error);
+    if (error.code === 'P2025') {
+      return res.status(404).json({
+        message: 'Usuario no encontrado'
       })
     }
-  }
 
-  if (name) {
-    user.name = name;
-  }
-
-  if (email) {
-    user.email = email;
-  }
-
-  res.json({
-    data: user,
-    message: 'Usuario actualizado correctamente'
-  })
-})
-
-app.delete('/users/:id', (req, res) => {
-  const userId = req.params.id;
-  const userIndex = users.findIndex(user => user.id === userId);
-
-  if (userIndex === -1) {
-    return res.status(404).json({
-      message: 'Usuario no encontrado'
+    res.status(500).json({
+      message: 'Error al eliminar el usuario'
     })
   }
-
-  users.splice(userIndex, 1);
-
-  res.status(204).send();
 })
 
 app.listen(PORT, () => {
-  console.log(`Servidor corriendo en http://localhost:${PORT}`)
-})
+  console.log(`Servidor corriendo en http://localhost:${PORT}`);
+});
